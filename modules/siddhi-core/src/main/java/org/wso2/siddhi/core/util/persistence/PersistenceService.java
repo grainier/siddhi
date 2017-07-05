@@ -18,6 +18,7 @@
 package org.wso2.siddhi.core.util.persistence;
 
 import org.apache.log4j.Logger;
+import org.wso2.siddhi.core.SiddhiEventOffsetHolder;
 import org.wso2.siddhi.core.config.ExecutionPlanContext;
 import org.wso2.siddhi.core.exception.NoPersistenceStoreException;
 import org.wso2.siddhi.core.util.ThreadBarrier;
@@ -46,8 +47,13 @@ public class PersistenceService {
                 log.debug("Persisting...");
             }
             byte[] snapshot = snapshotService.snapshot();
+            byte[] snapshotOffset = snapshotService.snapshotOffsetHolder();
             String revision = System.currentTimeMillis() + "_" + executionPlanName;
             persistenceStore.save(executionPlanName, revision, snapshot);
+            persistenceStore.save(executionPlanName+"offset", revision, snapshotOffset);
+            for (PersistenceListener persistenceListener : SiddhiEventOffsetHolder.getPersistenceListeners()) {
+                persistenceListener.onSave(executionPlanName, revision);
+            }
             if (log.isDebugEnabled()) {
                 log.debug("Persisted.");
             }
@@ -75,13 +81,32 @@ public class PersistenceService {
 
     }
 
+    public void restoreRevisionOffset(String revision) {
+
+        if (persistenceStore != null) {
+            if (log.isDebugEnabled()) {
+                log.debug("Restoring revision Offset: " + revision + " ...");
+            }
+            byte[] snapshot = persistenceStore.load(executionPlanName+"offset", revision);
+            snapshotService.restoreOffsetHolder(snapshot);
+            if (log.isDebugEnabled()) {
+                log.debug("Restored revision Offset: " + revision);
+            }
+        } else {
+            throw new NoPersistenceStoreException("No persistence store assigned for execution plan " + executionPlanName);
+        }
+
+    }
+
     public void restoreLastRevision() {
         try {
             this.threadBarrier.lock();
             if (persistenceStore != null) {
                 String revision = persistenceStore.getLastRevision(executionPlanName);
+                String revisionOffset = persistenceStore.getLastRevision(executionPlanName+"offset");
                 if (revision != null) {
                     restoreRevision(revision);
+                    restoreRevisionOffset(revisionOffset);
                 }
             } else {
                 throw new NoPersistenceStoreException("No persistence store assigned for execution plan " + executionPlanName);
