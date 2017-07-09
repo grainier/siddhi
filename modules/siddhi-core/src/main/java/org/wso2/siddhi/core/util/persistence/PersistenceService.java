@@ -18,7 +18,6 @@
 package org.wso2.siddhi.core.util.persistence;
 
 import org.apache.log4j.Logger;
-import org.wso2.siddhi.core.SiddhiEventOffsetHolder;
 import org.wso2.siddhi.core.config.ExecutionPlanContext;
 import org.wso2.siddhi.core.exception.NoPersistenceStoreException;
 import org.wso2.siddhi.core.util.ThreadBarrier;
@@ -26,7 +25,8 @@ import org.wso2.siddhi.core.util.snapshot.SnapshotService;
 
 public class PersistenceService {
 
-    static final Logger log = Logger.getLogger(PersistenceService.class);
+    private static final Logger LOGGER = Logger.getLogger(PersistenceService.class);
+    private static final String RECEIVER_SUFFIX = ".receiver";
     private String executionPlanName;
     private PersistenceStore persistenceStore;
     private SnapshotService snapshotService;
@@ -39,63 +39,54 @@ public class PersistenceService {
         this.threadBarrier = executionPlanContext.getThreadBarrier();
     }
 
-
     public String persist() {
-
         if (persistenceStore != null) {
-            if (log.isDebugEnabled()) {
-                log.debug("Persisting...");
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("Persisting...");
             }
             byte[] snapshot = snapshotService.snapshot();
-            byte[] snapshotOffset = snapshotService.snapshotOffsetHolder();
+            byte[] receiversSnapshot = snapshotService.snapshotReceivers();
             String revision = System.currentTimeMillis() + "_" + executionPlanName;
             persistenceStore.save(executionPlanName, revision, snapshot);
-            persistenceStore.save(executionPlanName+"offset", revision, snapshotOffset);
-            for (PersistenceListener persistenceListener : SiddhiEventOffsetHolder.getPersistenceListeners()) {
-                persistenceListener.onSave(executionPlanName, revision);
-            }
-            if (log.isDebugEnabled()) {
-                log.debug("Persisted.");
+            persistenceStore.save(executionPlanName + RECEIVER_SUFFIX, revision, receiversSnapshot);
+            snapshotService.nofityReceiversOnSave(receiversSnapshot);
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("Persisted.");
             }
             return revision;
         } else {
             throw new NoPersistenceStoreException("No persistence store assigned for execution plan " + executionPlanName);
         }
-
     }
 
     public void restoreRevision(String revision) {
-
         if (persistenceStore != null) {
-            if (log.isDebugEnabled()) {
-                log.debug("Restoring revision: " + revision + " ...");
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("Restoring revision: " + revision + " ...");
             }
             byte[] snapshot = persistenceStore.load(executionPlanName, revision);
             snapshotService.restore(snapshot);
-            if (log.isDebugEnabled()) {
-                log.debug("Restored revision: " + revision);
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("Restored revision: " + revision);
             }
         } else {
             throw new NoPersistenceStoreException("No persistence store assigned for execution plan " + executionPlanName);
         }
-
     }
 
-    public void restoreRevisionOffset(String revision) {
-
+    public void restoreReceiversRevision(String revision) {
         if (persistenceStore != null) {
-            if (log.isDebugEnabled()) {
-                log.debug("Restoring revision Offset: " + revision + " ...");
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("Restoring receivers revision: " + revision + " ...");
             }
-            byte[] snapshot = persistenceStore.load(executionPlanName+"offset", revision);
-            snapshotService.restoreOffsetHolder(snapshot);
-            if (log.isDebugEnabled()) {
-                log.debug("Restored revision Offset: " + revision);
+            byte[] snapshot = persistenceStore.load(executionPlanName + RECEIVER_SUFFIX, revision);
+            snapshotService.restoreReceivers(snapshot);
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("Restored receivers revision: " + revision);
             }
         } else {
             throw new NoPersistenceStoreException("No persistence store assigned for execution plan " + executionPlanName);
         }
-
     }
 
     public void restoreLastRevision() {
@@ -103,10 +94,12 @@ public class PersistenceService {
             this.threadBarrier.lock();
             if (persistenceStore != null) {
                 String revision = persistenceStore.getLastRevision(executionPlanName);
-                String revisionOffset = persistenceStore.getLastRevision(executionPlanName+"offset");
+                String receiversRevision = persistenceStore.getLastRevision(executionPlanName + RECEIVER_SUFFIX);
                 if (revision != null) {
                     restoreRevision(revision);
-                    restoreRevisionOffset(revisionOffset);
+                }
+                if (receiversRevision != null) {
+                    restoreReceiversRevision(receiversRevision);
                 }
             } else {
                 throw new NoPersistenceStoreException("No persistence store assigned for execution plan " + executionPlanName);

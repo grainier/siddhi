@@ -16,8 +16,18 @@
  * under the License.
  */
 
-package org.wso2.siddhi.core.util.persistence;
+package org.wso2.siddhi.core.util.snapshot;
 
-public interface PersistenceListener {
-    void onSave(String executionPlanName, String revision);
+
+import java.util.Map;
+
+public interface SnapshotableElement {
+
+    Map<String, Object> currentState();
+
+    void restoreState(Map<String, Object> state);
+
+    void onSave(Map<String, Object> state);
+
+    String getElementId();
 }

@@ -18,22 +18,23 @@
 package org.wso2.siddhi.core.util.snapshot;
 
 import org.apache.log4j.Logger;
-import org.wso2.siddhi.core.SiddhiEventOffsetHolder;
+import org.wso2.siddhi.core.SnapshotableElementsHolder;
 import org.wso2.siddhi.core.config.ExecutionPlanContext;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class SnapshotService {
     private static final Logger log = Logger.getLogger(SnapshotService.class);
     private List<Snapshotable> snapshotableList = new ArrayList<Snapshotable>();
     private ExecutionPlanContext executionPlanContext;
-    private SiddhiEventOffsetHolder siddhiEventOffsetHolder;
+    private SnapshotableElementsHolder snapshotableElementsHolder;
 
     public SnapshotService(ExecutionPlanContext executionPlanContext) {
         this.executionPlanContext = executionPlanContext;
-        this.siddhiEventOffsetHolder = new SiddhiEventOffsetHolder();
+        this.snapshotableElementsHolder = new SnapshotableElementsHolder();
     }
 
     public void addSnapshotable(Snapshotable snapshotable) {
@@ -72,33 +73,55 @@ public class SnapshotService {
         }
     }
 
-
-    public byte[] snapshotOffsetHolder() {
-        HashMap<String, Object[]> snapshots = new HashMap<String, Object[]>(1);
-
-        log.debug("Taking snapshot Offset ...");
+    public byte[] snapshotReceivers() {
+        HashMap<String, Map<String, Object>> snapshots =
+                new HashMap<String, Map<String, Object>>(snapshotableElementsHolder.getSnapshotableElements().size());
+        log.debug("Taking Event Receiver Snapshots ...");
         try {
             executionPlanContext.getThreadBarrier().lock();
-            snapshots.put(siddhiEventOffsetHolder.getElementId(), siddhiEventOffsetHolder.currentState());
+            for (SnapshotableElement snapshotable : snapshotableElementsHolder.getSnapshotableElements()) {
+                snapshots.put(snapshotable.getElementId(), snapshotable.currentState());
+            }
         } finally {
             executionPlanContext.getThreadBarrier().unlock();
         }
-        log.info("Snapshot taken of Execution Plan Offset '" + executionPlanContext.getName() + "'");
+        log.info("Event Receiver Snapshots has been taken ...");
 
-        log.debug("Snapshot serialization started ...");
+        log.debug("Event Receiver Snapshots serialization started ...");
         byte[] serializedSnapshots = ByteSerializer.OToB(snapshots);
-        log.debug("Snapshot serialization finished.");
+        log.debug("Event Receiver Snapshots finished.");
         return serializedSnapshots;
-
     }
 
-    public void restoreOffsetHolder(byte[] snapshot) {
-        HashMap<String, Object[]> snapshots = (HashMap<String, Object[]>) ByteSerializer.BToO(snapshot);
+    public void restoreReceivers(byte[] snapshot) {
+        HashMap<String, Map<String, Object>> snapshots =
+                (HashMap<String, Map<String, Object>>) ByteSerializer.BToO(snapshot);
         try {
             this.executionPlanContext.getThreadBarrier().lock();
-            siddhiEventOffsetHolder.restoreState(snapshots.get(siddhiEventOffsetHolder.getElementId()));
+            if (snapshots != null) {
+                for (Map.Entry<String, Map<String, Object>> entry : snapshots.entrySet()) {
+                    String receiverName = entry.getKey();
+                    Map<String, Object> savedState = entry.getValue();
+                    SnapshotableElement snapshotable = snapshotableElementsHolder.getSnapshotableElement(receiverName);
+                    if (snapshotable == null) {
+                        SnapshotableElementsHolder.putExistingState(receiverName, savedState);
+                    } else {
+                        snapshotable.restoreState(savedState);
+                    }
+                }
+            }
         } finally {
             executionPlanContext.getThreadBarrier().unlock();
+        }
+    }
+
+    public void nofityReceiversOnSave(byte[] snapshot) {
+        HashMap<String, Map<String, Object>> snapshots =
+                (HashMap<String, Map<String, Object>>) ByteSerializer.BToO(snapshot);
+        for (SnapshotableElement snapshotable : snapshotableElementsHolder.getSnapshotableElements()) {
+            if (snapshots != null && snapshots.get(snapshotable.getElementId()) != null) {
+                snapshotable.onSave(snapshots.get(snapshotable.getElementId()));
+            }
         }
     }
 
