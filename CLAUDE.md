@@ -146,6 +146,18 @@ inputHandler.send(new Object[]{"WSO2", 55.6f});
 - Java 8+ required
 - Uses Log4j2 for logging
 
+## 🎯 Important: Task Prioritization for Rust Implementation
+
+**When working on the Rust implementation, ALWAYS consult `siddhi_rust/ROADMAP.md` first to determine next tasks.**
+
+The ROADMAP.md contains the authoritative priority list, including:
+- Critical extension implementations that must be completed
+- Strategic decisions needed (e.g., TCP vs gRPC, Redis vs Ignite)
+- Current blockers and their resolution status
+- Timeline and success criteria for all features
+
+**Never assume what to work on next - check the roadmap for current priorities.**
+
 ## Working with Both Implementations
 
 When porting features from Java to Rust:
