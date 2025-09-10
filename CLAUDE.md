@@ -163,7 +163,7 @@ The ROADMAP.md contains the authoritative priority list, including:
 When porting features from Java to Rust:
 1. Study the Java implementation in `modules/siddhi-core/src/main/java/`
 2. Check existing Rust patterns in `siddhi_rust/src/core/`
-3. Maintain API compatibility where possible
+3. Design optimal API for the new engine (no backward compatibility needed)
 4. Focus on idiomatic Rust (ownership, error handling)
 5. Add comprehensive tests matching Java test coverage
 
@@ -173,6 +173,19 @@ Key differences to note:
 - Java's exceptions → Rust's Result<T, E>
 - Java's synchronized → Rust's Arc<Mutex<T>>
 - Java's reflection → Rust requires more explicit registration
+
+## Important Development Guidelines
+
+### New Engine Approach
+- **No Backward Compatibility**: Design optimal solutions without legacy constraints
+- **Clean Architecture**: Build modern, efficient implementations from scratch
+- **Best Practices**: Follow current industry standards and Rust idioms
+
+### Git Commit Guidelines
+- **Never mention Claude or AI assistance** in commit messages
+- **Focus on technical changes**: Describe what was implemented, not how
+- **Standard format**: Use conventional commit format without co-author tags
+- **Example**: `feat: implement window syntax with colon separator` (not `feat: implement window syntax with Claude's help`)
 
 ## Recent Major Updates
 
@@ -264,3 +277,12 @@ See `siddhi_rust/CLAUDE.md` for detailed technical information and implementatio
 - **Enterprise Readiness**: Clear path to horizontal scaling
 - **Developer Experience**: Zero complexity for simple deployments
 - **Production Viability**: Comprehensive operational considerations
+
+## CRITICAL: New Engine Development Philosophy
+
+**This is a new streaming engine, not a migration:**
+- No backward compatibility constraints - design optimal solutions
+- Focus on modern best practices and performance
+- Clean architecture without legacy baggage
+- Never mention AI assistance or Claude in commits
+- Build the best possible CEP engine using Rust's advantages
