@@ -1,0 +1,46 @@
+@app:name('StockMonitor')
+@app:description('Monitors stock prices and generates alerts for significant changes')
+
+-- Define input stream for stock data
+define stream StockStream (symbol string, price float, volume long, timestamp long);
+
+-- Define output stream for alerts
+define stream AlertStream (symbol string, price float, priceChange float, alertType string, timestamp long);
+
+-- Define output stream for statistics
+define stream StatsStream (symbol string, avgPrice double, maxPrice float, minPrice float, totalVolume long, windowTime long);
+
+-- Alert for significant price increase (>5% in last 10 events)
+from StockStream#window:length(10) as s1
+join StockStream as s2
+on s1.symbol == s2.symbol
+select s2.symbol, s2.price, ((s2.price - s1.price) / s1.price * 100) as priceChange, 
+       'PRICE_SURGE' as alertType, s2.timestamp
+having priceChange > 5.0
+insert into AlertStream;
+
+-- Alert for significant price drop (>5% in last 10 events)
+from StockStream#window:length(10) as s1
+join StockStream as s2
+on s1.symbol == s2.symbol
+select s2.symbol, s2.price, ((s2.price - s1.price) / s1.price * 100) as priceChange,
+       'PRICE_DROP' as alertType, s2.timestamp
+having priceChange < -5.0
+insert into AlertStream;
+
+-- Calculate statistics over time window (1 minute)
+from StockStream#window:time(60000)
+select symbol, 
+       avg(price) as avgPrice,
+       max(price) as maxPrice,
+       min(price) as minPrice,
+       sum(volume) as totalVolume,
+       currentTimeMillis() as windowTime
+group by symbol
+output every 10 sec
+insert into StatsStream;
+
+-- High volume alert (volume > 1 million)
+from StockStream[volume > 1000000]
+select symbol, price, 0.0 as priceChange, 'HIGH_VOLUME' as alertType, timestamp
+insert into AlertStream;

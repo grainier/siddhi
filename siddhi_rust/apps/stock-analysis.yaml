@@ -1,0 +1,129 @@
+# Siddhi App Deployment Descriptor
+# Following patterns from Flink FlinkDeployment and WSO2 Siddhi
+apiVersion: siddhi.io/v1beta1
+kind: SiddhiApp
+metadata:
+  name: stock-analysis
+  namespace: default
+spec:
+  # Application configuration
+  app:
+    name: StockAnalysis
+    version: "1.0.0"
+    description: "Real-time stock price analysis with alerts"
+    
+  # Siddhi Query Language definition
+  query: |
+    @app:name('StockAnalysis')
+    @app:description('Analyze stock prices and generate alerts')
+    
+    -- Input stream for stock prices
+    define stream StockStream (
+      symbol string,
+      price double,
+      volume long,
+      timestamp long
+    );
+    
+    -- Output stream for price alerts
+    define stream PriceAlertStream (
+      symbol string,
+      avgPrice double,
+      maxPrice double,
+      minPrice double,
+      volume long,
+      alertType string
+    );
+    
+    -- Calculate 1-minute moving averages
+    @info(name = 'price-monitor')
+    from StockStream#window:time(1 min)
+    select 
+      symbol,
+      avg(price) as avgPrice,
+      max(price) as maxPrice,
+      min(price) as minPrice,
+      sum(volume) as volume,
+      'VOLATILITY' as alertType
+    group by symbol
+    having (maxPrice - minPrice) / avgPrice > 0.05  -- 5% volatility
+    insert into PriceAlertStream;
+    
+    -- Detect price spikes
+    @info(name = 'spike-detector')
+    from StockStream#window:length(2)
+    select 
+      symbol,
+      price as avgPrice,
+      price as maxPrice,
+      price as minPrice,
+      volume,
+      'SPIKE' as alertType
+    having price > price[1] * 1.1  -- 10% increase
+    insert into PriceAlertStream;
+    
+  # Runtime configuration
+  runtime:
+    # Parallelism settings
+    parallelism: 2
+    
+    # State management
+    state:
+      backend: redis
+      checkpointInterval: 60s
+      enableIncrementalCheckpointing: true
+    
+    # Resource allocation
+    resources:
+      memory: "512Mi"
+      cpu: "500m"
+    
+  # Source configuration (where data comes from)
+  sources:
+    - name: kafka-stock-feed
+      type: kafka
+      stream: StockStream
+      config:
+        bootstrap.servers: "kafka:9092"
+        topic: "stock-prices"
+        group.id: "stock-analysis-group"
+        key.deserializer: "org.apache.kafka.common.serialization.StringDeserializer"
+        value.deserializer: "org.apache.kafka.common.serialization.JsonDeserializer"
+        
+  # Sink configuration (where results go)
+  sinks:
+    - name: alert-notifier
+      type: http
+      stream: PriceAlertStream
+      config:
+        publisher.url: "http://alert-service:8080/alerts"
+        method: "POST"
+        headers: "Content-Type:application/json"
+        
+    - name: alert-store
+      type: kafka
+      stream: PriceAlertStream
+      config:
+        bootstrap.servers: "kafka:9092"
+        topic: "price-alerts"
+        key.serializer: "org.apache.kafka.common.serialization.StringSerializer"
+        value.serializer: "org.apache.kafka.common.serialization.JsonSerializer"
+        
+  # Deployment configuration
+  deployment:
+    replicas: 3
+    upgradeMode: stateful  # stateful, stateless, or savepoint
+    restartPolicy: always  # always, on-failure, never
+    
+  # Monitoring configuration
+  monitoring:
+    metrics:
+      enabled: true
+      port: 9090
+      path: /metrics
+    healthCheck:
+      enabled: true
+      port: 8080
+      path: /health
+      initialDelaySeconds: 30
+      periodSeconds: 10

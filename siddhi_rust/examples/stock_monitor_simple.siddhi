@@ -1,0 +1,9 @@
+@app:name('StockMonitorSimple')
+
+define stream StockStream (symbol string, price float, volume long, timestamp long);
+
+define stream AlertStream (symbol string, price float, alertType string, timestamp long);
+
+from StockStream[price > 200.0]
+select symbol, price, 'HIGH_PRICE' as alertType, timestamp
+insert into AlertStream;

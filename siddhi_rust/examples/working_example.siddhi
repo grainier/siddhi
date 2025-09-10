@@ -1,0 +1,6 @@
+define stream StockStream (symbol string, price int, volume int);
+define stream AlertStream (symbol string, price int);
+
+from StockStream[price > 100]
+select symbol, price
+insert into AlertStream;

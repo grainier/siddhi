@@ -1,0 +1,92 @@
+@app:name('TemperatureMonitor')
+@app:description('Monitor temperature sensors and detect anomalies')
+@app:statistics('true')
+
+-- Define input stream for sensor readings
+define stream SensorStream (
+    sensorId string,
+    temperature double,
+    humidity double,
+    location string,
+    timestamp long
+);
+
+-- Define output streams
+define stream TemperatureAlertStream (
+    sensorId string,
+    temperature double,
+    alertType string,
+    location string,
+    message string
+);
+
+define stream AnomalyStream (
+    sensorId string,
+    avgTemp double,
+    stdDev double,
+    currentTemp double,
+    location string
+);
+
+-- Detect high temperature
+@info(name = 'high-temp-detector')
+from SensorStream[temperature > 35]
+select 
+    sensorId,
+    temperature,
+    'HIGH_TEMP' as alertType,
+    location,
+    str:concat('High temperature detected: ', str:toString(temperature), '°C') as message
+insert into TemperatureAlertStream;
+
+-- Detect low temperature
+@info(name = 'low-temp-detector')
+from SensorStream[temperature < 5]
+select 
+    sensorId,
+    temperature,
+    'LOW_TEMP' as alertType,
+    location,
+    str:concat('Low temperature detected: ', str:toString(temperature), '°C') as message
+insert into TemperatureAlertStream;
+
+-- Detect rapid temperature changes
+@info(name = 'rapid-change-detector')
+from every s1 = SensorStream 
+    -> s2 = SensorStream[s1.sensorId == sensorId and 
+                         math:abs(s1.temperature - temperature) > 5.0]
+    within 1 min
+select 
+    s2.sensorId,
+    s2.temperature,
+    'RAPID_CHANGE' as alertType,
+    s2.location,
+    str:concat('Temperature changed from ', str:toString(s1.temperature), 
+               '°C to ', str:toString(s2.temperature), '°C') as message
+insert into TemperatureAlertStream;
+
+-- Statistical anomaly detection using sliding window
+@info(name = 'anomaly-detector')
+from SensorStream#window:time(5 min)
+select 
+    sensorId,
+    avg(temperature) as avgTemp,
+    stddev(temperature) as stdDev,
+    temperature as currentTemp,
+    location
+group by sensorId, location
+having currentTemp > avgTemp + (2 * stdDev) or 
+       currentTemp < avgTemp - (2 * stdDev)
+insert into AnomalyStream;
+
+-- Pattern detection: Sensor failure (no reading for 5 minutes)
+@info(name = 'sensor-failure-detector')
+from every s1 = SensorStream 
+    -> not SensorStream[sensorId == s1.sensorId] for 5 min
+select 
+    s1.sensorId,
+    0.0 as temperature,
+    'SENSOR_FAILURE' as alertType,
+    s1.location,
+    str:concat('No data received from sensor ', s1.sensorId, ' for 5 minutes') as message
+insert into TemperatureAlertStream;

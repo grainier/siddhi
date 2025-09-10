@@ -1,0 +1,56 @@
+# Docker ignore file for Siddhi Rust
+# Exclude unnecessary files from build context
+
+# Cargo build artifacts
+target/
+target_*/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Backup files
+*.bak
+*.tmp
+
+# Git
+.git/
+.gitignore
+
+# Documentation (keep for reference but not needed for build)
+*.md
+docs/
+
+# Config backups
+config/backups/
+
+# State files
+state/
+
+# Development database files
+*.db
+*.sqlite
+
+# Docker files (avoid recursion)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Examples (not needed for build, can be mounted at runtime)
+# examples/
+
+# Development scripts
+*.sh
+run_*.sh
+# Exception: Allow docker-entrypoint.sh for container
+!docker-entrypoint.sh

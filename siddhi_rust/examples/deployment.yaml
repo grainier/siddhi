@@ -1,0 +1,123 @@
+# Siddhi Application Deployment Descriptor
+# Following industry patterns from Apache Flink and WSO2 Siddhi
+
+apiVersion: siddhi.io/v1
+kind: SiddhiAppDeployment
+metadata:
+  name: production-apps
+  namespace: default
+  labels:
+    environment: production
+    team: data-engineering
+
+spec:
+  # Runtime configuration
+  runtime:
+    replicas: 3
+    resources:
+      memory: 2Gi
+      cpu: 2
+    persistence:
+      enabled: true
+      type: redis
+      checkpointInterval: 60s
+    
+  # Applications to deploy
+  applications:
+    - name: stock-monitor
+      file: stock_monitor.siddhi
+      config:
+        parallelism: 2
+        bufferSize: 10000
+        sources:
+          - type: kafka
+            properties:
+              bootstrap.servers: kafka:9092
+              topic: stock-prices
+              group.id: stock-monitor-group
+        sinks:
+          - name: AlertStream
+            type: kafka
+            properties:
+              bootstrap.servers: kafka:9092
+              topic: stock-alerts
+          - name: StatsStream
+            type: prometheus
+            properties:
+              metrics.port: 9090
+              
+    - name: iot-sensor-monitor
+      file: iot_sensor.siddhi
+      config:
+        parallelism: 4
+        bufferSize: 50000
+        sources:
+          - type: mqtt
+            properties:
+              broker.url: tcp://mqtt:1883
+              topic: sensors/+/data
+              qos: 1
+        sinks:
+          - name: AnomalyStream
+            type: webhook
+            properties:
+              endpoint: http://alert-service:8080/anomalies
+              method: POST
+          - name: AggregatedDataStream
+            type: timeseries
+            properties:
+              database: influxdb
+              url: http://influxdb:8086
+              
+    - name: fraud-detection
+      file: fraud_detection.siddhi
+      config:
+        parallelism: 3
+        bufferSize: 20000
+        sources:
+          - type: http
+            properties:
+              receiver.url: http://0.0.0.0:8280/transactions
+              basic.auth.enabled: true
+        sinks:
+          - name: FraudAlertStream
+            type: email
+            properties:
+              smtp.host: smtp.example.com
+              smtp.port: 587
+              to: security@example.com
+              subject: Fraud Alert
+          - name: UserProfileStream
+            type: redis
+            properties:
+              host: redis
+              port: 6379
+              key.prefix: user:profile:
+
+  # Monitoring configuration
+  monitoring:
+    metrics:
+      enabled: true
+      port: 9090
+      path: /metrics
+    health:
+      enabled: true
+      port: 8080
+      path: /health
+    tracing:
+      enabled: true
+      type: jaeger
+      endpoint: http://jaeger:14268/api/traces
+
+  # Scaling configuration
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    metrics:
+      - type: cpu
+        targetUtilization: 70
+      - type: memory
+        targetUtilization: 80
+      - type: lag
+        targetValue: 10000

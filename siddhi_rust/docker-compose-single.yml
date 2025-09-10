@@ -1,0 +1,104 @@
+# Docker Compose for Siddhi Rust Single Node
+# Simple deployment for development and testing
+
+# Simple Docker Compose for Single-Node Siddhi Deployment
+# Following WSO2 Siddhi and Kafka Streams patterns
+
+services:
+  # Single Siddhi Instance
+  siddhi:
+    build:
+      context: .
+      target: siddhi-runner
+    container_name: siddhi-single
+    hostname: siddhi
+    environment:
+      - NODE_ID=standalone
+      - CLUSTER_ENABLED=false
+      - PERSISTENCE_ENABLED=true
+      - PERSISTENCE_TYPE=file
+      - METRICS_ENABLED=true
+      - SIDDHI_THREADS=8
+      - SIDDHI_BATCH_SIZE=1000
+      - SIDDHI_MAX_QUEUE=100000
+      # Mount apps from local directory
+      - SIDDHI_APPS_DIR=/opt/siddhi/apps
+      - SIDDHI_DEPLOYMENT_DIR=/opt/siddhi/deployment
+    ports:
+      - "8080:8080"  # Health check endpoint
+      - "8006:8006"  # HTTP API for app deployment
+      - "9090:9090"  # Prometheus metrics
+    volumes:
+      # Mount local Siddhi apps directory
+      - ./examples:/opt/siddhi/apps:ro
+      # Mount deployment directory for hot deployment
+      - ./deployment:/opt/siddhi/deployment
+      # Mount config directory
+      - ./config:/opt/siddhi/config:ro
+      # Persist state
+      - siddhi-state:/opt/siddhi/state
+      # Persist logs
+      - siddhi-logs:/opt/siddhi/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - siddhi-network
+    command: ["run"]
+
+  # Optional: Redis for external state store
+  redis:
+    image: redis:7-alpine
+    container_name: siddhi-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - siddhi-network
+    profiles:
+      - with-redis
+
+  # Optional: Redis Commander for debugging
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: siddhi-redis-commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - siddhi-network
+    profiles:
+      - with-redis
+
+volumes:
+  siddhi-state:
+    driver: local
+  siddhi-logs:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  siddhi-network:
+    driver: bridge

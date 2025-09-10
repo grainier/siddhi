@@ -1,0 +1,71 @@
+# Prometheus configuration for Siddhi cluster monitoring
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'siddhi-rust'
+    environment: 'development'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "siddhi_rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Scrape Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Scrape Siddhi Manager
+  - job_name: 'siddhi-manager'
+    static_configs:
+      - targets: ['siddhi-manager:9090']
+    metrics_path: '/metrics'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'manager-1'
+      - source_labels: []
+        target_label: node_type
+        replacement: 'manager'
+
+  # Scrape Siddhi Workers
+  - job_name: 'siddhi-workers'
+    static_configs:
+      - targets: 
+        - 'siddhi-worker-1:9090'
+        - 'siddhi-worker-2:9090'
+        - 'siddhi-worker-3:9090'
+    metrics_path: '/metrics'
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: 'siddhi-worker-(\d+):.*'
+        target_label: worker_id
+        replacement: 'worker-$1'
+      - source_labels: []
+        target_label: node_type
+        replacement: 'worker'
+
+  # Scrape Redis metrics (if Redis exporter is used)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    relabel_configs:
+      - source_labels: []
+        target_label: service
+        replacement: 'redis'
+
+# Service discovery configuration (for dynamic environments)
+# Can be replaced with Kubernetes service discovery in production
+# kubernetes_sd_configs:
+#   - role: pod
+#     namespaces:
+#       names:
+#         - siddhi

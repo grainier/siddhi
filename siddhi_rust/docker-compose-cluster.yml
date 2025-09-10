@@ -1,0 +1,251 @@
+# Docker Compose for Siddhi Rust Cluster
+# Following industry standards for distributed stream processing
+
+# Docker Compose for Siddhi Rust Distributed Cluster
+# Following patterns from Flink, Kafka, and WSO2 Siddhi
+
+services:
+  # Redis for state backend (already in main docker-compose.yml)
+  redis:
+    image: redis:7-alpine
+    container_name: siddhi-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfilename "siddhi-redis.aof"
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - siddhi-network
+
+  # Siddhi Manager Node (like Flink JobManager)
+  siddhi-manager:
+    build:
+      context: .
+      target: siddhi-runner
+    container_name: siddhi-manager
+    hostname: siddhi-manager
+    environment:
+      - NODE_ID=manager-1
+      - CLUSTER_ENABLED=true
+      - SEED_NODES=siddhi-manager:7000
+      - PERSISTENCE_TYPE=redis
+      - REDIS_ENDPOINT=redis:6379
+      - STATE_BACKEND=redis
+      - TRANSPORT_TYPE=tcp
+      - METRICS_ENABLED=true
+      - SIDDHI_THREADS=4
+      # Additional properties can be set via SIDDHI_PROPERTIES
+      - SIDDHI_PROPERTIES=log.level=info
+    ports:
+      - "8080:8080"  # Health check
+      - "8006:8006"  # HTTP API
+      - "9090:9090"  # Metrics
+      - "7100:7000"  # Cluster communication (external port changed to avoid conflict)
+    volumes:
+      - ./examples:/opt/siddhi/apps:ro
+      - ./config:/opt/siddhi/config:ro
+      - manager-state:/opt/siddhi/state
+      - manager-logs:/opt/siddhi/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - siddhi-network
+    command: ["manager"]
+
+  # Siddhi Worker Node 1 (like Flink TaskManager)
+  siddhi-worker-1:
+    build:
+      context: .
+      target: siddhi-runner
+    container_name: siddhi-worker-1
+    hostname: siddhi-worker-1
+    environment:
+      - NODE_ID=worker-1
+      - CLUSTER_ENABLED=true
+      - SEED_NODES=siddhi-manager:7000
+      - PERSISTENCE_TYPE=redis
+      - REDIS_ENDPOINT=redis:6379
+      - STATE_BACKEND=redis
+      - TRANSPORT_TYPE=tcp
+      - METRICS_ENABLED=true
+      - SIDDHI_THREADS=8
+    ports:
+      - "8081:8080"  # Health check
+      - "8007:8006"  # HTTP API
+      - "9091:9090"  # Metrics
+      - "7001:7000"  # Cluster communication
+    volumes:
+      - ./examples:/opt/siddhi/apps:ro
+      - ./config:/opt/siddhi/config:ro
+      - worker1-state:/opt/siddhi/state
+      - worker1-logs:/opt/siddhi/logs
+    depends_on:
+      - siddhi-manager
+      - redis
+    networks:
+      - siddhi-network
+    command: ["worker"]
+
+  # Siddhi Worker Node 2
+  siddhi-worker-2:
+    build:
+      context: .
+      target: siddhi-runner
+    container_name: siddhi-worker-2
+    hostname: siddhi-worker-2
+    environment:
+      - NODE_ID=worker-2
+      - CLUSTER_ENABLED=true
+      - SEED_NODES=siddhi-manager:7000
+      - PERSISTENCE_TYPE=redis
+      - REDIS_ENDPOINT=redis:6379
+      - STATE_BACKEND=redis
+      - TRANSPORT_TYPE=tcp
+      - METRICS_ENABLED=true
+      - SIDDHI_THREADS=8
+    ports:
+      - "8082:8080"  # Health check
+      - "8008:8006"  # HTTP API
+      - "9092:9090"  # Metrics
+      - "7002:7000"  # Cluster communication
+    volumes:
+      - ./examples:/opt/siddhi/apps:ro
+      - ./config:/opt/siddhi/config:ro
+      - worker2-state:/opt/siddhi/state
+      - worker2-logs:/opt/siddhi/logs
+    depends_on:
+      - siddhi-manager
+      - redis
+    networks:
+      - siddhi-network
+    command: ["worker"]
+
+  # Siddhi Worker Node 3
+  siddhi-worker-3:
+    build:
+      context: .
+      target: siddhi-runner
+    container_name: siddhi-worker-3
+    hostname: siddhi-worker-3
+    environment:
+      - NODE_ID=worker-3
+      - CLUSTER_ENABLED=true
+      - SEED_NODES=siddhi-manager:7000
+      - PERSISTENCE_TYPE=redis
+      - REDIS_ENDPOINT=redis:6379
+      - STATE_BACKEND=redis
+      - TRANSPORT_TYPE=tcp
+      - METRICS_ENABLED=true
+      - SIDDHI_THREADS=8
+    ports:
+      - "8083:8080"  # Health check
+      - "8009:8006"  # HTTP API
+      - "9093:9090"  # Metrics
+      - "7003:7000"  # Cluster communication
+    volumes:
+      - ./examples:/opt/siddhi/apps:ro
+      - ./config:/opt/siddhi/config:ro
+      - worker3-state:/opt/siddhi/state
+      - worker3-logs:/opt/siddhi/logs
+    depends_on:
+      - siddhi-manager
+      - redis
+    networks:
+      - siddhi-network
+    command: ["worker"]
+
+  # Redis Commander for debugging state
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: siddhi-redis-commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8084:8081"  # Redis Commander web UI (moved to avoid conflict with worker-1)
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - siddhi-network
+
+  # Prometheus for metrics (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: siddhi-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9000:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - siddhi-network
+    depends_on:
+      - siddhi-manager
+      - siddhi-worker-1
+      - siddhi-worker-2
+      - siddhi-worker-3
+
+  # Grafana for visualization (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: siddhi-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      - siddhi-network
+    depends_on:
+      - prometheus
+
+volumes:
+  redis-data:
+    driver: local
+  manager-state:
+    driver: local
+  manager-logs:
+    driver: local
+  worker1-state:
+    driver: local
+  worker1-logs:
+    driver: local
+  worker2-state:
+    driver: local
+  worker2-logs:
+    driver: local
+  worker3-state:
+    driver: local
+  worker3-logs:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  siddhi-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

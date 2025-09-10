@@ -1,0 +1,59 @@
+@app:name('FraudDetection')
+@app:description('Detects potential fraud patterns in financial transactions')
+
+-- Define input stream for transactions
+define stream TransactionStream (transactionId string, userId string, amount float, merchantId string, 
+                                 merchantCategory string, location string, timestamp long);
+
+-- Define output streams
+define stream FraudAlertStream (transactionId string, userId string, fraudType string, riskScore float, reason string, timestamp long);
+define stream UserProfileStream (userId string, avgAmount double, txCount long, uniqueMerchants long, timeWindow long);
+
+-- Rule 1: Large transaction detection (amount > $10,000)
+from TransactionStream[amount > 10000.0]
+select transactionId, userId, 'LARGE_TRANSACTION' as fraudType, 
+       (amount / 10000.0) as riskScore,
+       str:concat('Large transaction: $', str:toString(amount)) as reason,
+       timestamp
+insert into FraudAlertStream;
+
+-- Rule 2: Rapid successive transactions (3+ transactions in 1 minute)
+from TransactionStream#window:time(60000)
+select transactionId, userId, 'RAPID_TRANSACTIONS' as fraudType,
+       convert(count(transactionId), 'float') / 3.0 as riskScore,
+       str:concat('Multiple transactions: ', str:toString(count(transactionId)), ' in 1 minute') as reason,
+       timestamp
+group by userId
+having count(transactionId) >= 3
+insert into FraudAlertStream;
+
+-- Rule 3: Geographic anomaly (transactions from different locations within 1 hour)
+from every e1=TransactionStream,
+     e2=TransactionStream[userId == e1.userId and location != e1.location]
+     within 1 hour
+select e2.transactionId, e2.userId, 'LOCATION_ANOMALY' as fraudType,
+       0.8 as riskScore,
+       str:concat('Location change: ', e1.location, ' to ', e2.location) as reason,
+       e2.timestamp
+insert into FraudAlertStream;
+
+-- Build user profile for baseline comparison
+from TransactionStream#window:timeBatch(300000) -- 5 minute windows
+select userId,
+       avg(amount) as avgAmount,
+       count(transactionId) as txCount,
+       countDistinct(merchantId) as uniqueMerchants,
+       currentTimeMillis() as timeWindow
+group by userId
+insert into UserProfileStream;
+
+-- Rule 4: Unusual spending pattern (transaction > 5x user average)
+from TransactionStream#window:length(20) as txWindow
+join TransactionStream as currentTx
+on txWindow.userId == currentTx.userId
+select currentTx.transactionId, currentTx.userId, 'UNUSUAL_AMOUNT' as fraudType,
+       (currentTx.amount / avg(txWindow.amount)) / 5.0 as riskScore,
+       str:concat('Amount $', str:toString(currentTx.amount), ' exceeds average') as reason,
+       currentTx.timestamp
+having currentTx.amount > (avg(txWindow.amount) * 5.0)
+insert into FraudAlertStream;

@@ -1,0 +1,53 @@
+@app:name('IoTSensorMonitor')
+@app:description('Processes IoT sensor data for anomaly detection and aggregation')
+
+-- Define input stream for sensor data
+define stream SensorStream (deviceId string, temperature float, humidity float, pressure float, location string, timestamp long);
+
+-- Define output streams
+define stream AnomalyStream (deviceId string, anomalyType string, value float, threshold float, location string, timestamp long);
+define stream AggregatedDataStream (location string, avgTemp double, avgHumidity double, avgPressure double, deviceCount long, timeWindow long);
+
+-- Temperature anomaly detection (> 40°C or < 0°C)
+from SensorStream[(temperature > 40.0 or temperature < 0.0)]
+select deviceId, 
+       ifThenElse(temperature > 40.0, 'HIGH_TEMPERATURE', 'LOW_TEMPERATURE') as anomalyType,
+       temperature as value,
+       ifThenElse(temperature > 40.0, 40.0, 0.0) as threshold,
+       location,
+       timestamp
+insert into AnomalyStream;
+
+-- Humidity anomaly detection (> 95% or < 20%)
+from SensorStream[(humidity > 95.0 or humidity < 20.0)]
+select deviceId,
+       ifThenElse(humidity > 95.0, 'HIGH_HUMIDITY', 'LOW_HUMIDITY') as anomalyType,
+       humidity as value,
+       ifThenElse(humidity > 95.0, 95.0, 20.0) as threshold,
+       location,
+       timestamp
+insert into AnomalyStream;
+
+-- Aggregate data by location every 30 seconds
+from SensorStream#window:timeBatch(30000)
+select location,
+       avg(temperature) as avgTemp,
+       avg(humidity) as avgHumidity,
+       avg(pressure) as avgPressure,
+       count(deviceId) as deviceCount,
+       currentTimeMillis() as timeWindow
+group by location
+insert into AggregatedDataStream;
+
+-- Pattern detection: Rapid temperature increase (3 consecutive increases)
+from every e1=SensorStream,
+     e2=SensorStream[e1.deviceId == deviceId and temperature > e1.temperature],
+     e3=SensorStream[e2.deviceId == deviceId and temperature > e2.temperature]
+     within 5 min
+select e3.deviceId,
+       'RAPID_TEMP_INCREASE' as anomalyType,
+       e3.temperature as value,
+       e1.temperature as threshold,
+       e3.location,
+       e3.timestamp
+insert into AnomalyStream;

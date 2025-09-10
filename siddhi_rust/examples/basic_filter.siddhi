@@ -1,0 +1,6 @@
+define stream InputStream (name string, value float);
+define stream OutputStream (name string, value float);
+
+from InputStream[value > 100.0]
+select name, value
+insert into OutputStream;

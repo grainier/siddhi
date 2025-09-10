@@ -1,0 +1,378 @@
+---
+# Kubernetes Deployment for Siddhi Rust
+# Following patterns from Flink Kubernetes Operator and WSO2 Siddhi
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: siddhi
+---
+# ConfigMap for Siddhi configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: siddhi-config
+  namespace: siddhi
+data:
+  runtime.yaml: |
+    engine:
+      threads: 8
+      event_batch_size: 1000
+      max_queue_size: 100000
+    
+    persistence:
+      enabled: true
+      type: redis
+      redis:
+        endpoints:
+          - "redis-service:6379"
+        cluster_mode: false
+    
+    metrics:
+      enabled: true
+      port: 9090
+    
+    monitoring:
+      health_check:
+        enabled: true
+        port: 8080
+        path: /health
+---
+# Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: siddhi
+  namespace: siddhi
+---
+# Role for Siddhi
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: siddhi
+  namespace: siddhi
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "services", "pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+---
+# RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: siddhi
+  namespace: siddhi
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: siddhi
+subjects:
+  - kind: ServiceAccount
+    name: siddhi
+    namespace: siddhi
+---
+# Redis Deployment (State Backend)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: siddhi
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          command:
+            - redis-server
+            - --appendonly
+            - "yes"
+            - --maxmemory
+            - "512mb"
+            - --maxmemory-policy
+            - "allkeys-lru"
+          volumeMounts:
+            - name: redis-storage
+              mountPath: /data
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+      volumes:
+        - name: redis-storage
+          emptyDir: {}
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: siddhi
+spec:
+  selector:
+    app: redis
+  ports:
+    - protocol: TCP
+      port: 6379
+      targetPort: 6379
+---
+# Siddhi Manager StatefulSet (like Flink JobManager)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: siddhi-manager
+  namespace: siddhi
+spec:
+  serviceName: siddhi-manager
+  replicas: 1
+  selector:
+    matchLabels:
+      app: siddhi-manager
+  template:
+    metadata:
+      labels:
+        app: siddhi-manager
+        component: manager
+    spec:
+      serviceAccountName: siddhi
+      containers:
+        - name: siddhi-manager
+          image: siddhi-rust:latest
+          imagePullPolicy: IfNotPresent
+          command: ["manager"]
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: CLUSTER_ENABLED
+              value: "true"
+            - name: SEED_NODES
+              value: "siddhi-manager-0.siddhi-manager:7000"
+            - name: STATE_BACKEND
+              value: "redis"
+            - name: REDIS_ENDPOINT
+              value: "redis-service:6379"
+          ports:
+            - name: http-api
+              containerPort: 8006
+            - name: health
+              containerPort: 8080
+            - name: cluster
+              containerPort: 7000
+            - name: metrics
+              containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /opt/siddhi/config
+            - name: apps
+              mountPath: /opt/siddhi/apps
+            - name: state
+              mountPath: /opt/siddhi/state
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+      volumes:
+        - name: config
+          configMap:
+            name: siddhi-config
+        - name: apps
+          configMap:
+            name: siddhi-apps
+            optional: true
+        - name: state
+          emptyDir: {}
+---
+# Siddhi Manager Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: siddhi-manager
+  namespace: siddhi
+spec:
+  clusterIP: None
+  selector:
+    app: siddhi-manager
+  ports:
+    - name: cluster
+      port: 7000
+      targetPort: 7000
+    - name: http-api
+      port: 8006
+      targetPort: 8006
+---
+# Siddhi Worker Deployment (like Flink TaskManager)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: siddhi-worker
+  namespace: siddhi
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: siddhi-worker
+  template:
+    metadata:
+      labels:
+        app: siddhi-worker
+        component: worker
+    spec:
+      serviceAccountName: siddhi
+      containers:
+        - name: siddhi-worker
+          image: siddhi-rust:latest
+          imagePullPolicy: IfNotPresent
+          command: ["worker"]
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: CLUSTER_ENABLED
+              value: "true"
+            - name: SEED_NODES
+              value: "siddhi-manager-0.siddhi-manager:7000"
+            - name: STATE_BACKEND
+              value: "redis"
+            - name: REDIS_ENDPOINT
+              value: "redis-service:6379"
+            - name: SIDDHI_THREADS
+              value: "8"
+          ports:
+            - name: http-api
+              containerPort: 8006
+            - name: health
+              containerPort: 8080
+            - name: cluster
+              containerPort: 7000
+            - name: metrics
+              containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /opt/siddhi/config
+            - name: apps
+              mountPath: /opt/siddhi/apps
+            - name: state
+              mountPath: /opt/siddhi/state
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+      volumes:
+        - name: config
+          configMap:
+            name: siddhi-config
+        - name: apps
+          configMap:
+            name: siddhi-apps
+            optional: true
+        - name: state
+          emptyDir: {}
+---
+# Service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: siddhi-api
+  namespace: siddhi
+spec:
+  type: LoadBalancer
+  selector:
+    component: manager
+  ports:
+    - name: http-api
+      port: 8006
+      targetPort: 8006
+    - name: health
+      port: 8080
+      targetPort: 8080
+---
+# ConfigMap for Siddhi Apps
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: siddhi-apps
+  namespace: siddhi
+data:
+  temperature-monitor.siddhi: |
+    @app:name('TemperatureMonitor')
+    define stream SensorStream (sensorId string, temperature double, location string);
+    define stream AlertStream (sensorId string, temperature double, message string);
+    
+    from SensorStream[temperature > 35]
+    select sensorId, temperature, 
+           str:concat('High temperature: ', str:toString(temperature)) as message
+    insert into AlertStream;
+---
+# HorizontalPodAutoscaler for Workers
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: siddhi-worker-hpa
+  namespace: siddhi
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: siddhi-worker
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

@@ -1,0 +1,13 @@
+@app:name('FraudDetectionSimple')
+
+define stream TransactionStream (transactionId string, userId string, amount float, merchantId string, 
+                                 merchantCategory string, location string, timestamp long);
+
+define stream FraudAlertStream (transactionId string, userId string, fraudType string, riskScore float, reason string, timestamp long);
+
+from TransactionStream[amount > 10000.0]
+select transactionId, userId, 'LARGE_TRANSACTION' as fraudType, 
+       (amount / 10000.0) as riskScore,
+       str:concat('Large transaction: $', str:toString(amount)) as reason,
+       timestamp
+insert into FraudAlertStream;

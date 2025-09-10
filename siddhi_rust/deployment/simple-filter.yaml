@@ -1,0 +1,42 @@
+# Simple Siddhi App Deployment
+# Minimal configuration for single-node deployment
+apiVersion: siddhi.io/v1beta1
+kind: SiddhiApp
+metadata:
+  name: simple-filter
+spec:
+  # Inline Siddhi query
+  query: |
+    @app:name('SimpleFilter')
+    
+    define stream InputStream (name string, value double);
+    define stream OutputStream (name string, value double);
+    
+    @info(name = 'filter-query')
+    from InputStream[value > 100]
+    select name, value
+    insert into OutputStream;
+    
+  # Minimal runtime config
+  runtime:
+    parallelism: 1
+    state:
+      backend: memory
+      
+  # Simple HTTP source
+  sources:
+    - name: http-input
+      type: http
+      stream: InputStream
+      config:
+        receiver.url: "http://0.0.0.0:8006/input"
+        basic.auth.enabled: "false"
+        
+  # Log sink for testing
+  sinks:
+    - name: log-output
+      type: log
+      stream: OutputStream
+      config:
+        prefix: "[OUTPUT]"
+        priority: "INFO"
